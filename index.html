@@ -7,6 +7,7 @@
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js">
     </script>
     <style>
+        /* Stijlen blijven grotendeels ongewijzigd, maar ik voeg wat extra's toe voor de link en debug info */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -132,6 +133,13 @@
             transition: all 0.2s;
             min-width: 80px;
         }
+        .btn-primary {
+            background: #1e6f9f;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #155a82;
+        }
         .btn-success {
             background: #2a9d6a;
             color: white;
@@ -152,6 +160,14 @@
         }
         .btn-warning:hover {
             background: #d48a20;
+        }
+        .btn-outline {
+            background: transparent;
+            color: #7ec8f0;
+            border: 2px solid #2a4a6a;
+        }
+        .btn-outline:hover {
+            background: #1a2a3f;
         }
         .input-group {
             display: flex;
@@ -186,6 +202,7 @@
             margin-top: 0.5rem;
             min-height: 80px;
             border-left: 4px solid #2a4a6a;
+            word-wrap: break-word;
         }
         .result-box .status {
             font-weight: 700;
@@ -208,6 +225,18 @@
         }
         .result-box .details strong {
             color: #c0d8e8;
+        }
+        .result-box .debug {
+            font-size: 0.7rem;
+            color: #6a8aa0;
+            margin-top: 0.5rem;
+            border-top: 1px solid #2a4a6a;
+            padding-top: 0.5rem;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            font-family: monospace;
+            max-height: 150px;
+            overflow-y: auto;
         }
         .loading {
             color: #7ec8f0;
@@ -251,24 +280,12 @@
             background: #0f1f30;
             border-radius: 8px;
         }
-        @keyframes borderPulse {
-            0%,
-            100% {
-                border-color: #4ecdc4;
-                box-shadow: 0 0 20px rgba(78, 205, 196, 0.3);
-            }
-            50% {
-                border-color: #7ec8f0;
-                box-shadow: 0 0 40px rgba(78, 205, 196, 0.6);
-            }
-        }
         .detection-box {
             position: absolute;
             border: 4px solid #4ecdc4;
             border-radius: 8px;
             pointer-events: none;
             display: none;
-            animation: borderPulse 1s ease-in-out infinite;
             box-shadow: 0 0 30px rgba(78, 205, 196, 0.4);
             background: rgba(78, 205, 196, 0.05);
             z-index: 10;
@@ -290,6 +307,20 @@
             white-space: nowrap;
             letter-spacing: 1px;
             text-transform: uppercase;
+        }
+        .rdw-link {
+            display: inline-block;
+            margin-top: 0.5rem;
+            padding: 0.3rem 0.8rem;
+            background: #1e6f9f;
+            border-radius: 20px;
+            color: white;
+            text-decoration: none;
+            font-size: 0.8rem;
+            transition: 0.2s;
+        }
+        .rdw-link:hover {
+            background: #155a82;
         }
         @media (max-width: 480px) {
             .container {
@@ -327,9 +358,10 @@
         <!-- Knoppen -->
         <div class="controls">
             <button id="toggleCameraBtn" class="btn btn-warning">📷 Start camera</button>
+            <button id="manualScanBtn" class="btn btn-primary" disabled>📸 Scan nu</button>
         </div>
 
-        <!-- Handmatige invoer (optioneel) -->
+        <!-- Handmatige invoer -->
         <div class="input-group">
             <input type="text" id="kentekenInput" placeholder="Of typ handmatig: 12-ABC-3" maxlength="12" />
             <button id="checkBtn" class="btn btn-success">🔍 Check</button>
@@ -359,6 +391,7 @@
             const overlayCanvas = document.getElementById('overlayCanvas');
             const overlayCtx = overlayCanvas.getContext('2d');
             const toggleCameraBtn = document.getElementById('toggleCameraBtn');
+            const manualScanBtn = document.getElementById('manualScanBtn');
             const kentekenInput = document.getElementById('kentekenInput');
             const checkBtn = document.getElementById('checkBtn');
             const resultBox = document.getElementById('resultBox');
@@ -371,7 +404,6 @@
             // --- State ---
             let cameraStream = null;
             let cameraActive = false;
-            let isScanning = false;
             let scanInterval = null;
             let lastScannedKenteken = '';
             let isProcessing = false;
@@ -397,6 +429,7 @@
                     scanOverlay.classList.add('active');
                     toggleCameraBtn.textContent = '📷 Stop camera';
                     toggleCameraBtn.className = 'btn btn-danger';
+                    manualScanBtn.disabled = false;
                     scanStatus.textContent = '🔄 Scannen actief... wacht op kenteken';
                     hintMessage.textContent = '✅ Camera actief – automatisch scannen gestart';
                     startAutoScan();
@@ -438,9 +471,9 @@
                 scanOverlay.classList.remove('active');
                 toggleCameraBtn.textContent = '📷 Start camera';
                 toggleCameraBtn.className = 'btn btn-warning';
+                manualScanBtn.disabled = true;
                 scanStatus.textContent = '⏸️ Camera gestopt';
                 hintMessage.textContent = 'Camera gestopt. Klik op "Start camera" om opnieuw te beginnen.';
-                isScanning = false;
                 detectionBox.classList.remove('active');
                 overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
             }
@@ -453,64 +486,66 @@
                 }
             }
 
-            // --- KLEURFILTER: Detecteer gele of blauwe kentekenplaat ---
-            function detectPlateColor(imageData, width, height) {
-                let yellowCount = 0;
-                let blueCount = 0;
-                let totalSamples = 0;
-                const step = 10;
+            // --- Kleurdetectie (geel/blauw) ---
+            function findPlateRegion(imageData, width, height) {
+                const data = imageData.data;
+                let minX = width,
+                    minY = height,
+                    maxX = 0,
+                    maxY = 0;
+                let found = false;
+                const step = 4;
 
-                for (let y = Math.floor(height * 0.1); y < Math.floor(height * 0.9); y += step) {
-                    for (let x = Math.floor(width * 0.1); x < Math.floor(width * 0.9); x += step) {
-                        const index = (y * width + x) * 4;
-                        const r = imageData.data[index];
-                        const g = imageData.data[index + 1];
-                        const b = imageData.data[index + 2];
+                for (let y = 0; y < height; y += step) {
+                    for (let x = 0; x < width; x += step) {
+                        const idx = (y * width + x) * 4;
+                        const r = data[idx];
+                        const g = data[idx + 1];
+                        const b = data[idx + 2];
 
-                        // Gele plaat: hoge R en G, lage B
-                        if (r > 150 && g > 150 && b < 100 && r > b + 30 && g > b + 30) {
-                            yellowCount++;
-                            totalSamples++;
-                        }
-                        // Blauwe plaat: hoge B, lage R en G
-                        else if (b > 100 && r < 120 && g < 120 && b > r + 30 && b > g + 30) {
-                            blueCount++;
-                            totalSamples++;
+                        const isYellow = (r > 150 && g > 150 && b < 100 && r > b + 30 && g > b + 30);
+                        const isBlue = (b > 100 && r < 120 && g < 120 && b > r + 30 && b > g + 30);
+
+                        if (isYellow || isBlue) {
+                            found = true;
+                            if (x < minX) minX = x;
+                            if (x > maxX) maxX = x;
+                            if (y < minY) minY = y;
+                            if (y > maxY) maxY = y;
                         }
                     }
                 }
 
-                if (totalSamples > 10) {
-                    if (yellowCount > blueCount && yellowCount > 5) {
-                        return 'geel';
-                    } else if (blueCount > yellowCount && blueCount > 5) {
-                        return 'blauw';
-                    }
+                if (found && maxX - minX > 20 && maxY - minY > 20) {
+                    const margin = 20;
+                    return {
+                        x: Math.max(0, minX - margin),
+                        y: Math.max(0, minY - margin),
+                        w: Math.min(width - minX + margin, maxX - minX + margin * 2),
+                        h: Math.min(height - minY + margin, maxY - minY + margin * 2)
+                    };
                 }
                 return null;
             }
 
-            // --- Verbeterde kenteken validatie ---
+            // --- Validatie Nederlands kenteken ---
             function isValidDutchLicensePlate(plate) {
                 const clean = plate.replace(/[- ]/g, '').toUpperCase();
-                if (!/^[A-Z0-9]{6,9}$/.test(clean)) {
-                    return false;
-                }
+                if (!/^[A-Z0-9]{6,9}$/.test(clean)) return false;
                 const patterns = [
-                    /^[A-Z]{2}[0-9]{2}[A-Z]{2}$/, // AA-12-AA
-                    /^[A-Z]{2}[0-9]{3}[A-Z]{1}$/, // AA-123-A
-                    /^[A-Z]{1}[0-9]{3}[A-Z]{2}$/, // A-123-AA
-                    /^[0-9]{2}[A-Z]{2}[0-9]{2}$/, // 12-AA-12
-                    /^[0-9]{2}[A-Z]{3}[0-9]{1}$/, // 12-AAA-1
-                    /^[0-9]{1}[A-Z]{3}[0-9]{2}$/, // 1-AAA-12
-                    /^[A-Z]{3}[0-9]{2}[A-Z]{1}$/, // AAA-12-A
-                    /^[A-Z]{1}[0-9]{2}[A-Z]{3}$/, // A-12-AAA
-                    /^[0-9]{2}[A-Z]{2}[0-9]{2}$/ // 12-AA-12
+                    /^[A-Z]{2}[0-9]{2}[A-Z]{2}$/,
+                    /^[A-Z]{2}[0-9]{3}[A-Z]{1}$/,
+                    /^[A-Z]{1}[0-9]{3}[A-Z]{2}$/,
+                    /^[0-9]{2}[A-Z]{2}[0-9]{2}$/,
+                    /^[0-9]{2}[A-Z]{3}[0-9]{1}$/,
+                    /^[0-9]{1}[A-Z]{3}[0-9]{2}$/,
+                    /^[A-Z]{3}[0-9]{2}[A-Z]{1}$/,
+                    /^[A-Z]{1}[0-9]{2}[A-Z]{3}$/
                 ];
-                return patterns.some(pattern => pattern.test(clean));
+                return patterns.some(p => p.test(clean));
             }
 
-            // --- Toon detectiekader op het camerabeeld ---
+            // --- Toon detectiekader ---
             function showDetectionBox(bbox) {
                 if (!bbox) {
                     detectionBox.classList.remove('active');
@@ -524,121 +559,80 @@
 
                 const x = bbox.x0 || 0;
                 const y = bbox.y0 || 0;
-                const width = (bbox.x1 || 0) - x;
-                const height = (bbox.y1 || 0) - y;
+                const w = (bbox.x1 || 0) - x;
+                const h = (bbox.y1 || 0) - y;
 
-                if (width > 10 && height > 10) {
+                if (w > 10 && h > 10) {
                     overlayCtx.strokeStyle = '#4ecdc4';
                     overlayCtx.lineWidth = 4;
-                    overlayCtx.shadowColor = 'rgba(78, 205, 196, 0.6)';
+                    overlayCtx.shadowColor = 'rgba(78,205,196,0.6)';
                     overlayCtx.shadowBlur = 20;
-                    overlayCtx.strokeRect(x, y, width, height);
-                    overlayCtx.shadowBlur = 40;
-                    overlayCtx.shadowColor = 'rgba(78, 205, 196, 0.3)';
-                    overlayCtx.strokeRect(x, y, width, height);
+                    overlayCtx.strokeRect(x, y, w, h);
+                    overlayCtx.shadowBlur = 0;
                     detectionBox.classList.remove('active');
                 } else {
                     detectionBox.classList.remove('active');
                 }
             }
 
-            // --- HOOFDFUNCTIE: Scan met kleurfiltering en OCR ---
-            async function performAutoScan() {
+            // --- OCR en kentekenherkenning ---
+            async function performScan() {
                 if (!cameraActive || isProcessing) return;
                 isProcessing = true;
 
                 try {
-                    // 1. Maak een snapshot van de camera (hogere resolutie voor betere OCR)
                     const captureWidth = 640;
                     const captureHeight = 480;
                     canvas.width = captureWidth;
                     canvas.height = captureHeight;
                     ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
 
-                    // 2. Kleurdetectie op het volledige beeld
                     const imageData = ctx.getImageData(0, 0, captureWidth, captureHeight);
-                    const plateColor = detectPlateColor(imageData, captureWidth, captureHeight);
+                    const plateRegion = findPlateRegion(imageData, captureWidth, captureHeight);
 
-                    // 3. Als er een plaatkleur is gevonden, focus dan op dat gebied
+                    let cropCanvas = canvas;
                     let cropX = 0,
                         cropY = 0,
                         cropW = captureWidth,
                         cropH = captureHeight;
 
-                    if (plateColor) {
-                        // Zoek naar de grenzen van de plaat op basis van kleur
-                        let minX = captureWidth,
-                            minY = captureHeight,
-                            maxX = 0,
-                            maxY = 0;
-                        const step = 5;
-                        const data = imageData.data;
+                    if (plateRegion) {
+                        cropX = plateRegion.x;
+                        cropY = plateRegion.y;
+                        cropW = plateRegion.w;
+                        cropH = plateRegion.h;
 
-                        for (let y = 0; y < captureHeight; y += step) {
-                            for (let x = 0; x < captureWidth; x += step) {
-                                const index = (y * captureWidth + x) * 4;
-                                const r = data[index];
-                                const g = data[index + 1];
-                                const b = data[index + 2];
+                        const scaleX = video.videoWidth / captureWidth;
+                        const scaleY = video.videoHeight / captureHeight;
+                        showDetectionBox({
+                            x0: cropX * scaleX,
+                            y0: cropY * scaleY,
+                            x1: (cropX + cropW) * scaleX,
+                            y1: (cropY + cropH) * scaleY
+                        });
 
-                                let isPlateColor = false;
-                                if (plateColor === 'geel') {
-                                    isPlateColor = (r > 150 && g > 150 && b < 100 && r > b + 30 && g > b + 30);
-                                } else if (plateColor === 'blauw') {
-                                    isPlateColor = (b > 100 && r < 120 && g < 120 && b > r + 30 && b > g + 30);
-                                }
-
-                                if (isPlateColor) {
-                                    if (x < minX) minX = x;
-                                    if (x > maxX) maxX = x;
-                                    if (y < minY) minY = y;
-                                    if (y > maxY) maxY = y;
-                                }
-                            }
-                        }
-
-                        // Als we een gebied hebben gevonden, crop dan met marge
-                        if (maxX > minX && maxY > minY) {
-                            const margin = 30;
-                            cropX = Math.max(0, minX - margin);
-                            cropY = Math.max(0, minY - margin);
-                            cropW = Math.min(captureWidth - cropX, maxX - minX + margin * 2);
-                            cropH = Math.min(captureHeight - cropY, maxY - minY + margin * 2);
-
-                            // Teken een kader rond de gevonden plaat op de overlay
-                            const scaleX = video.videoWidth / captureWidth;
-                            const scaleY = video.videoHeight / captureHeight;
-                            showDetectionBox({
-                                x0: cropX * scaleX,
-                                y0: cropY * scaleY,
-                                x1: (cropX + cropW) * scaleX,
-                                y1: (cropY + cropH) * scaleY
-                            });
-                        }
+                        const tempCanvas = document.createElement('canvas');
+                        tempCanvas.width = cropW;
+                        tempCanvas.height = cropH;
+                        const tempCtx = tempCanvas.getContext('2d');
+                        tempCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+                        cropCanvas = tempCanvas;
+                    } else {
+                        showDetectionBox(null);
                     }
 
-                    // 4. OCR alleen op het gekropte gebied (of volledig beeld als geen kleur is gevonden)
-                    const cropCanvas = document.createElement('canvas');
-                    cropCanvas.width = cropW;
-                    cropCanvas.height = cropH;
-                    const cropCtx = cropCanvas.getContext('2d');
-                    cropCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-                    // 5. OCR uitvoeren met Tesseract.js
                     const result = await Tesseract.recognize(
                         cropCanvas,
                         'nld', {
                             logger: (m) => {},
                             tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ',
                             tessedit_pageseg_mode: '7',
-                            tessedit_ocr_engine_mode: '3',
-                            tessedit_do_invert: false
+                            tessedit_ocr_engine_mode: '3'
                         }
                     );
 
                     const text = result.data.text;
 
-                    // 6. Zoek naar kentekenpatronen in de OCR-tekst
                     const patterns = [
                         /\b[A-Z]{2}[- ]?[0-9]{2}[- ]?[A-Z]{2}\b/i,
                         /\b[A-Z]{2}[- ]?[0-9]{3}[- ]?[A-Z]{1}\b/i,
@@ -648,8 +642,6 @@
                         /\b[0-9]{1}[- ]?[A-Z]{3}[- ]?[0-9]{2}\b/i,
                         /\b[A-Z]{3}[- ]?[0-9]{2}[- ]?[A-Z]{1}\b/i,
                         /\b[A-Z]{1}[- ]?[0-9]{2}[- ]?[A-Z]{3}\b/i,
-                        /\b[0-9]{2}[- ]?[A-Z]{2}[- ]?[0-9]{2}\b/i,
-                        // Zonder streepjes
                         /\b[A-Z]{2}[0-9]{2}[A-Z]{2}\b/i,
                         /\b[A-Z]{2}[0-9]{3}[A-Z]{1}\b/i,
                         /\b[A-Z]{1}[0-9]{3}[A-Z]{2}\b/i,
@@ -673,7 +665,6 @@
                         let kenteken = kentekenMatch[0].toUpperCase().replace(/\s/g, '');
                         const clean = kenteken.replace(/[- ]/g, '');
 
-                        // Formatteer met streepjes
                         if (clean.length === 6) {
                             kenteken = clean.slice(0, 2) + '-' + clean.slice(2, 4) + '-' + clean.slice(4);
                         } else if (clean.length === 7) {
@@ -688,13 +679,10 @@
                             if (kenteken !== lastScannedKenteken) {
                                 lastScannedKenteken = kenteken;
                                 kentekenInput.value = kenteken;
-                                const colorStr = plateColor ? ` (${plateColor})` : '';
-                                scanStatus.textContent = `🔍 Kenteken gevonden: ${kenteken}${colorStr} - checken...`;
+                                scanStatus.textContent = `🔍 Kenteken gevonden: ${kenteken} - checken...`;
                                 await checkKenteken(kenteken);
 
-                                if (detectionTimeout) {
-                                    clearTimeout(detectionTimeout);
-                                }
+                                if (detectionTimeout) clearTimeout(detectionTimeout);
                                 detectionTimeout = setTimeout(() => {
                                     showDetectionBox(null);
                                     detectionTimeout = null;
@@ -708,14 +696,10 @@
                                 }, 3000);
                             }
                         } else {
-                            if (scanStatus.textContent.includes('wacht op kenteken') === false &&
-                                scanStatus.textContent.includes('Scannen actief') === false) {
-                                scanStatus.textContent = '🔄 Scannen actief... zoekend naar kenteken';
-                            }
+                            scanStatus.textContent = '🔄 Scannen actief... geen geldig kenteken gevonden';
                         }
                     } else {
-                        if (scanStatus.textContent.includes('wacht op kenteken') === false &&
-                            scanStatus.textContent.includes('Scannen actief') === false) {
+                        if (!scanStatus.textContent.includes('wacht op kenteken')) {
                             scanStatus.textContent = '🔄 Scannen actief... wacht op kenteken';
                         }
                         showDetectionBox(null);
@@ -727,39 +711,42 @@
                 }
             }
 
-            // --- Automatisch scannen (0.4 seconden interval) ---
+            // --- Automatisch scannen ---
             function startAutoScan() {
-                if (scanInterval) {
-                    clearInterval(scanInterval);
-                }
-                isScanning = true;
-                scanInterval = setInterval(async () => {
+                if (scanInterval) clearInterval(scanInterval);
+                scanInterval = setInterval(() => {
                     if (!cameraActive || isProcessing) return;
-                    await performAutoScan();
+                    performScan();
                 }, 400);
             }
 
-            // --- RDW API check via Open Data API ---
+            // --- Handmatige scan ---
+            async function manualScan() {
+                if (!cameraActive || isProcessing) return;
+                await performScan();
+            }
+
+            // --- VERBETERDE RDW CHECK ---
             async function checkKenteken(kenteken) {
                 const clean = kenteken.replace(/[- ]/g, '').toUpperCase();
                 if (!/^[A-Z0-9]{6,9}$/.test(clean)) {
-                    setResult('⚠️ Ongeldig kentekenformaat. Gebruik bijv. 12-ABC-3', 'fout');
+                    setResult('⚠️ Ongeldig kentekenformaat.', 'fout');
                     return;
                 }
 
                 setResult('🔄 Controleren bij RDW...', 'loading');
 
                 try {
-                    // RDW Open Data API - voertuigdataset
-                    const query = `https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken=${clean}`;
-                    const response = await fetch(query);
+                    // Gebruik de RDW Open Data API
+                    const url =
+                        `https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken=${clean}`;
+                    const response = await fetch(url);
 
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`);
-                    }
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                     const data = await response.json();
 
+                    // Als er geen data is, kenteken niet gevonden
                     if (!data || data.length === 0) {
                         setResult('❌ Kenteken niet gevonden in RDW-register.', 'fout');
                         scanStatus.textContent = `❌ ${kenteken} niet gevonden`;
@@ -768,22 +755,56 @@
 
                     const voertuig = data[0];
 
-                    // Controleer de voertuigstatus op diefstal
-                    const status = voertuig.voertuigstatus || '';
-                    const isGestolen = status.toLowerCase().includes('gestolen') ||
-                        status.toLowerCase().includes('ontvreemd') ||
-                        status.toLowerCase().includes('diefstal');
+                    // Debug: toon volledige response in het resultaat (alleen als debug nodig is)
+                    const debugInfo = JSON.stringify(voertuig, null, 2);
 
-                    let html = '';
-                    if (isGestolen) {
-                        html += `<div class="status gestolen">🚨 GESTOLEN! Dit voertuig staat geregistreerd als gestolen.</div>`;
-                        scanStatus.textContent = `🚨 ${kenteken} - GESTOLEN!`;
-                    } else {
-                        html += `<div class="status schoon">✅ Geen diefstalregistratie gevonden voor dit voertuig.</div>`;
-                        scanStatus.textContent = `✅ ${kenteken} - schoon (status: ${status || 'onbekend'})`;
+                    // Controleer verschillende velden op diefstal
+                    const statusVelden = [
+                        voertuig.voertuigstatus,
+                        voertuig.status,
+                        voertuig.gestolen,
+                        voertuig.diefstal,
+                        voertuig.tenaamstelling
+                    ];
+
+                    let isGestolen = false;
+                    let gevondenStatus = '';
+
+                    for (const veld of statusVelden) {
+                        if (veld && typeof veld === 'string') {
+                            const lower = veld.toLowerCase();
+                            if (lower.includes('gestolen') || lower.includes('ontvreemd') || lower.includes('diefstal')) {
+                                isGestolen = true;
+                                gevondenStatus = veld;
+                                break;
+                            }
+                        }
                     }
 
-                    // Toon extra voertuigdetails
+                    // Als geen status gevonden is in de specifieke velden, gebruik dan de voertuigstatus als fallback
+                    if (!gevondenStatus && voertuig.voertuigstatus) {
+                        gevondenStatus = voertuig.voertuigstatus;
+                        if (gevondenStatus.toLowerCase().includes('gestolen') ||
+                            gevondenStatus.toLowerCase().includes('ontvreemd') ||
+                            gevondenStatus.toLowerCase().includes('diefstal')) {
+                            isGestolen = true;
+                        }
+                    }
+
+                    // Bouw het resultaat
+                    let html = '';
+                    if (isGestolen) {
+                        html +=
+                            `<div class="status gestolen">🚨 GESTOLEN! Dit voertuig staat geregistreerd als gestolen.</div>`;
+                        scanStatus.textContent = `🚨 ${kenteken} - GESTOLEN!`;
+                    } else {
+                        html +=
+                            `<div class="status schoon">✅ Geen diefstalregistratie gevonden voor dit voertuig.</div>`;
+                        const statusDisplay = gevondenStatus || voertuig.voertuigstatus || 'onbekend';
+                        scanStatus.textContent = `✅ ${kenteken} - schoon (status: ${statusDisplay})`;
+                    }
+
+                    // Toon voertuigdetails
                     html += `<div class="details">`;
                     html += `<strong>Kenteken:</strong> ${voertuig.kenteken || clean}<br>`;
                     html += `<strong>Merk:</strong> ${voertuig.merk || 'Onbekend'}<br>`;
@@ -792,8 +813,16 @@
                     if (voertuig.vervaldatum_apk) {
                         html += `<strong>APK vervaldatum:</strong> ${voertuig.vervaldatum_apk}<br>`;
                     }
-                    html += `<strong>Status voertuig:</strong> ${status || 'Onbekend'}`;
+                    const statusDisplay = gevondenStatus || voertuig.voertuigstatus || 'Onbekend';
+                    html += `<strong>Status voertuig:</strong> ${statusDisplay}`;
+
+                    // Link naar RDW site voor controle
+                    html +=
+                        `<br><a href="https://ovi.rdw.nl/default.aspx?kenteken=${clean}" target="_blank" class="rdw-link">🔗 Controleer op RDW-site</a>`;
                     html += `</div>`;
+
+                    // Debug info (optioneel, kan worden uitgecommentarieerd)
+                    // html += `<div class="debug">${debugInfo}</div>`;
 
                     setResult(html, isGestolen ? 'gestolen' : 'schoon');
 
@@ -811,40 +840,31 @@
                 } else {
                     resultBox.innerHTML = html;
                     resultBox.className = 'result-box';
-                    if (type === 'gestolen') {
-                        resultBox.style.borderLeftColor = '#ff6b6b';
-                    } else if (type === 'schoon') {
-                        resultBox.style.borderLeftColor = '#4ecdc4';
-                    } else {
-                        resultBox.style.borderLeftColor = '#ffa94d';
-                    }
+                    if (type === 'gestolen') resultBox.style.borderLeftColor = '#ff6b6b';
+                    else if (type === 'schoon') resultBox.style.borderLeftColor = '#4ecdc4';
+                    else resultBox.style.borderLeftColor = '#ffa94d';
                 }
             }
 
             // --- Event listeners ---
             toggleCameraBtn.addEventListener('click', toggleCamera);
+            manualScanBtn.addEventListener('click', manualScan);
 
             checkBtn.addEventListener('click', () => {
                 const kenteken = kentekenInput.value.trim();
-                if (kenteken) {
-                    checkKenteken(kenteken);
-                } else {
-                    setResult('⚠️ Voer een kenteken in.', 'fout');
-                }
+                if (kenteken) checkKenteken(kenteken);
+                else setResult('⚠️ Voer een kenteken in.', 'fout');
             });
 
             kentekenInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    checkBtn.click();
-                }
+                if (e.key === 'Enter') checkBtn.click();
             });
 
             // --- Init ---
             scanOverlay.classList.add('active');
-            hintMessage.textContent = 'Klik op "Start camera" om automatisch scannen te starten.';
+            hintMessage.textContent = 'Klik op "Start camera" om te beginnen. Gebruik "Scan nu" voor handmatige scan.';
             setResult('📱 Klik op "Start camera" en geef toestemming voor de camera.', '');
-
-            console.log('📷 Kenteken Scanner gestart met kleurfiltering en RDW Open Data API.');
+            console.log('Kenteken Scanner gestart met verbeterde RDW check.');
         })();
     </script>
 </body>
