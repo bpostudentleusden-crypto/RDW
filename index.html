@@ -279,31 +279,6 @@
             letter-spacing: 1px;
             text-transform: uppercase;
         }
-        .color-indicator {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            background: rgba(10, 20, 32, 0.8);
-            backdrop-filter: blur(4px);
-            display: none;
-            z-index: 15;
-            border: 2px solid transparent;
-        }
-        .color-indicator.active {
-            display: block;
-        }
-        .color-indicator.geel {
-            border-color: #ffd700;
-            color: #ffd700;
-        }
-        .color-indicator.blauw {
-            border-color: #1a6fc4;
-            color: #1a6fc4;
-        }
         @media (max-width: 480px) {
             .container { padding: 1rem; }
             .btn { font-size: 0.8rem; padding: 0.6rem 0.8rem; }
@@ -322,9 +297,6 @@
         <canvas id="overlayCanvas"></canvas>
         <div class="detection-box" id="detectionBox">
             <span class="label">🔍 Kenteken</span>
-        </div>
-        <div class="color-indicator" id="colorIndicator">
-            <span id="colorLabel">Geel</span>
         </div>
         <div class="camera-placeholder" id="cameraPlaceholder">
             <span class="icon">📸</span>
@@ -378,8 +350,6 @@
         const hintMessage = document.getElementById('hintMessage');
         const scanStatus = document.getElementById('scanStatus');
         const detectionBox = document.getElementById('detectionBox');
-        const colorIndicator = document.getElementById('colorIndicator');
-        const colorLabel = document.getElementById('colorLabel');
 
         // --- State ---
         let cameraStream = null;
@@ -389,7 +359,6 @@
         let lastScannedKenteken = '';
         let isProcessing = false;
         let detectionTimeout = null;
-        let detectedColor = null;
 
         // --- Camera ---
         async function startCamera() {
@@ -456,9 +425,7 @@
             hintMessage.textContent = 'Camera gestopt. Klik op "Start camera" om opnieuw te beginnen.';
             isScanning = false;
             detectionBox.classList.remove('active');
-            colorIndicator.classList.remove('active');
             overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-            detectedColor = null;
         }
 
         async function toggleCamera() {
@@ -467,80 +434,6 @@
             } else {
                 await startCamera();
             }
-        }
-
-        // --- Kleurdetectie functie ---
-        function detectPlateColor(imageData, width, height) {
-            // Sample pixels verspreid over het beeld om dominante kleur te vinden
-            const samples = [];
-            const step = 20;
-            let yellowCount = 0;
-            let blueCount = 0;
-            let whiteCount = 0;
-            let blackCount = 0;
-            let totalSamples = 0;
-
-            for (let y = Math.floor(height * 0.1); y < Math.floor(height * 0.9); y += step) {
-                for (let x = Math.floor(width * 0.1); x < Math.floor(width * 0.9); x += step) {
-                    const index = (y * width + x) * 4;
-                    const r = imageData.data[index];
-                    const g = imageData.data[index + 1];
-                    const b = imageData.data[index + 2];
-                    
-                    // Bepaal kleurcategorie
-                    const maxVal = Math.max(r, g, b);
-                    const minVal = Math.min(r, g, b);
-                    const diff = maxVal - minVal;
-                    
-                    // Check voor geel (hoge R en G, lage B)
-                    if (r > 150 && g > 150 && b < 100 && r > b + 30 && g > b + 30) {
-                        yellowCount++;
-                        totalSamples++;
-                    }
-                    // Check voor blauw (hoge B, lage R en G)
-                    else if (b > 100 && r < 120 && g < 120 && b > r + 30 && b > g + 30) {
-                        blueCount++;
-                        totalSamples++;
-                    }
-                    // Check voor wit/licht (alle waarden hoog)
-                    else if (r > 180 && g > 180 && b > 180 && diff < 40) {
-                        whiteCount++;
-                        totalSamples++;
-                    }
-                    // Check voor donker/zwart (alle waarden laag)
-                    else if (r < 80 && g < 80 && b < 80 && diff < 30) {
-                        blackCount++;
-                        totalSamples++;
-                    }
-                }
-            }
-
-            // Bepaal dominante kleur
-            let color = null;
-            let maxCount = 0;
-            
-            if (yellowCount > maxCount) {
-                maxCount = yellowCount;
-                color = 'geel';
-            }
-            if (blueCount > maxCount) {
-                maxCount = blueCount;
-                color = 'blauw';
-            }
-            if (whiteCount > maxCount && whiteCount > 5) {
-                maxCount = whiteCount;
-                color = 'wit';
-            }
-            if (blackCount > maxCount && blackCount > 5) {
-                maxCount = blackCount;
-                color = 'zwart';
-            }
-
-            // Alleen als we voldoende samples hebben en een kleur hebben gevonden
-            if (totalSamples > 10 && color) {
-                return color;
-            }
-            return null;
         }
 
         // --- Verbeterde kenteken validatie ---
@@ -565,7 +458,7 @@
         }
 
         // --- Toon detectiekader op het camerabeeld ---
-        function showDetectionBox(bbox, color) {
+        function showDetectionBox(bbox) {
             if (!bbox) {
                 detectionBox.classList.remove('active');
                 overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
@@ -582,21 +475,13 @@
             const height = (bbox.y1 || 0) - y;
 
             if (width > 10 && height > 10) {
-                // Kies kleur voor kader op basis van gedetecteerde plaatkleur
-                let borderColor = '#4ecdc4';
-                if (color === 'geel') {
-                    borderColor = '#ffd700';
-                } else if (color === 'blauw') {
-                    borderColor = '#1a6fc4';
-                }
-                
-                overlayCtx.strokeStyle = borderColor;
+                overlayCtx.strokeStyle = '#4ecdc4';
                 overlayCtx.lineWidth = 4;
-                overlayCtx.shadowColor = borderColor + '80';
+                overlayCtx.shadowColor = 'rgba(78, 205, 196, 0.6)';
                 overlayCtx.shadowBlur = 20;
                 overlayCtx.strokeRect(x, y, width, height);
                 overlayCtx.shadowBlur = 40;
-                overlayCtx.shadowColor = borderColor + '40';
+                overlayCtx.shadowColor = 'rgba(78, 205, 196, 0.3)';
                 overlayCtx.strokeRect(x, y, width, height);
                 detectionBox.classList.remove('active');
             } else {
@@ -604,59 +489,18 @@
             }
         }
 
-        // --- Kleuranalyse voor kentekenplaat ---
-        function analyzePlateColor() {
-            if (!cameraActive) return null;
-            
-            try {
-                const captureWidth = 320;
-                const captureHeight = 240;
-                canvas.width = captureWidth;
-                canvas.height = captureHeight;
-                ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
-                
-                const imageData = ctx.getImageData(0, 0, captureWidth, captureHeight);
-                return detectPlateColor(imageData, captureWidth, captureHeight);
-            } catch (err) {
-                console.error('Kleuranalyse error:', err);
-                return null;
-            }
-        }
-
-        // --- Snelle OCR met lagere resolutie en kleurdetectie ---
+        // --- Snelle OCR met lagere resolutie ---
         async function performAutoScan() {
             if (!cameraActive || isProcessing) return;
             isProcessing = true;
 
             try {
-                // Capture frame met lagere resolutie
                 const captureWidth = 320;
                 const captureHeight = 240;
                 canvas.width = captureWidth;
                 canvas.height = captureHeight;
                 ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
 
-                // Kleurdetectie uitvoeren
-                const imageData = ctx.getImageData(0, 0, captureWidth, captureHeight);
-                const plateColor = detectPlateColor(imageData, captureWidth, captureHeight);
-                
-                if (plateColor) {
-                    detectedColor = plateColor;
-                    // Update kleurindicator
-                    colorIndicator.className = 'color-indicator active ' + plateColor;
-                    const colorNames = {
-                        'geel': '🟡 Geel',
-                        'blauw': '🔵 Blauw',
-                        'wit': '⚪ Wit',
-                        'zwart': '⚫ Zwart'
-                    };
-                    colorLabel.textContent = colorNames[plateColor] || plateColor;
-                } else {
-                    colorIndicator.classList.remove('active');
-                    detectedColor = null;
-                }
-
-                // Snelle OCR met beperkte karakter set
                 const result = await Tesseract.recognize(
                     canvas,
                     'nld',
@@ -730,16 +574,14 @@
                     }
 
                     if (isValidDutchLicensePlate(kenteken)) {
-                        // Toon kader met de gedetecteerde kleur
                         if (matchedBbox) {
-                            showDetectionBox(matchedBbox, detectedColor);
+                            showDetectionBox(matchedBbox);
                         }
 
                         if (kenteken !== lastScannedKenteken) {
                             lastScannedKenteken = kenteken;
                             kentekenInput.value = kenteken;
-                            const colorStr = detectedColor ? ` (${detectedColor})` : '';
-                            scanStatus.textContent = `🔍 Kenteken gevonden: ${kenteken}${colorStr} - checken...`;
+                            scanStatus.textContent = `🔍 Kenteken gevonden: ${kenteken} - checken...`;
                             await checkKenteken(kenteken);
                             
                             if (detectionTimeout) {
@@ -878,4 +720,23 @@
             if (kenteken) {
                 checkKenteken(kenteken);
             } else {
-                setResult('⚠️
+                setResult('⚠️ Voer een kenteken in.', 'fout');
+            }
+        });
+
+        kentekenInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                checkBtn.click();
+            }
+        });
+
+        // --- Init ---
+        scanOverlay.classList.add('active');
+        hintMessage.textContent = 'Klik op "Start camera" om automatisch scannen te starten.';
+        setResult('📱 Klik op "Start camera" en geef toestemming voor de camera.', '');
+
+        console.log('📷 Kenteken Scanner gestart.');
+    })();
+</script>
+</body>
+</html>
