@@ -7,7 +7,6 @@
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js">
     </script>
     <style>
-        /* Stijlen blijven grotendeels ongewijzigd, maar ik voeg wat extra's toe voor de link en debug info */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -726,7 +725,7 @@
                 await performScan();
             }
 
-            // --- VERBETERDE RDW CHECK ---
+            // --- VERBETERDE RDW CHECK - Doorzoekt alle velden ---
             async function checkKenteken(kenteken) {
                 const clean = kenteken.replace(/[- ]/g, '').toUpperCase();
                 if (!/^[A-Z0-9]{6,9}$/.test(clean)) {
@@ -737,16 +736,15 @@
                 setResult('🔄 Controleren bij RDW...', 'loading');
 
                 try {
-                    // Gebruik de RDW Open Data API
+                    // Query met $select=* om alle velden op te halen
                     const url =
-                        `https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken=${clean}`;
+                        `https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken=${clean}&$select=*`;
                     const response = await fetch(url);
 
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                     const data = await response.json();
 
-                    // Als er geen data is, kenteken niet gevonden
                     if (!data || data.length === 0) {
                         setResult('❌ Kenteken niet gevonden in RDW-register.', 'fout');
                         scanStatus.textContent = `❌ ${kenteken} niet gevonden`;
@@ -755,33 +753,23 @@
 
                     const voertuig = data[0];
 
-                    // Debug: toon volledige response in het resultaat (alleen als debug nodig is)
-                    const debugInfo = JSON.stringify(voertuig, null, 2);
-
-                    // Controleer verschillende velden op diefstal
-                    const statusVelden = [
-                        voertuig.voertuigstatus,
-                        voertuig.status,
-                        voertuig.gestolen,
-                        voertuig.diefstal,
-                        voertuig.tenaamstelling
-                    ];
-
+                    // Zoek naar status in alle velden
+                    let gevondenStatus = null;
                     let isGestolen = false;
-                    let gevondenStatus = '';
 
-                    for (const veld of statusVelden) {
-                        if (veld && typeof veld === 'string') {
-                            const lower = veld.toLowerCase();
+                    // Doorloop alle sleutels van het object
+                    for (const [key, value] of Object.entries(voertuig)) {
+                        if (value && typeof value === 'string') {
+                            const lower = value.toLowerCase();
                             if (lower.includes('gestolen') || lower.includes('ontvreemd') || lower.includes('diefstal')) {
                                 isGestolen = true;
-                                gevondenStatus = veld;
+                                gevondenStatus = value;
                                 break;
                             }
                         }
                     }
 
-                    // Als geen status gevonden is in de specifieke velden, gebruik dan de voertuigstatus als fallback
+                    // Als we geen status hebben gevonden, gebruik dan voertuigstatus
                     if (!gevondenStatus && voertuig.voertuigstatus) {
                         gevondenStatus = voertuig.voertuigstatus;
                         if (gevondenStatus.toLowerCase().includes('gestolen') ||
@@ -791,7 +779,12 @@
                         }
                     }
 
-                    // Bouw het resultaat
+                    // Als nog steeds geen status, gebruik dan een standaardwaarde
+                    if (!gevondenStatus) {
+                        gevondenStatus = 'Onbekend';
+                    }
+
+                    // Bouw resultaat
                     let html = '';
                     if (isGestolen) {
                         html +=
@@ -800,8 +793,7 @@
                     } else {
                         html +=
                             `<div class="status schoon">✅ Geen diefstalregistratie gevonden voor dit voertuig.</div>`;
-                        const statusDisplay = gevondenStatus || voertuig.voertuigstatus || 'onbekend';
-                        scanStatus.textContent = `✅ ${kenteken} - schoon (status: ${statusDisplay})`;
+                        scanStatus.textContent = `✅ ${kenteken} - schoon (status: ${gevondenStatus})`;
                     }
 
                     // Toon voertuigdetails
@@ -813,16 +805,12 @@
                     if (voertuig.vervaldatum_apk) {
                         html += `<strong>APK vervaldatum:</strong> ${voertuig.vervaldatum_apk}<br>`;
                     }
-                    const statusDisplay = gevondenStatus || voertuig.voertuigstatus || 'Onbekend';
-                    html += `<strong>Status voertuig:</strong> ${statusDisplay}`;
+                    html += `<strong>Status voertuig:</strong> ${gevondenStatus}`;
 
-                    // Link naar RDW site voor controle
+                    // Link naar RDW site
                     html +=
                         `<br><a href="https://ovi.rdw.nl/default.aspx?kenteken=${clean}" target="_blank" class="rdw-link">🔗 Controleer op RDW-site</a>`;
                     html += `</div>`;
-
-                    // Debug info (optioneel, kan worden uitgecommentarieerd)
-                    // html += `<div class="debug">${debugInfo}</div>`;
 
                     setResult(html, isGestolen ? 'gestolen' : 'schoon');
 
@@ -864,7 +852,7 @@
             scanOverlay.classList.add('active');
             hintMessage.textContent = 'Klik op "Start camera" om te beginnen. Gebruik "Scan nu" voor handmatige scan.';
             setResult('📱 Klik op "Start camera" en geef toestemming voor de camera.', '');
-            console.log('Kenteken Scanner gestart met verbeterde RDW check.');
+            console.log('Kenteken Scanner gestart met verbeterde RDW check (alle velden).');
         })();
     </script>
 </body>
