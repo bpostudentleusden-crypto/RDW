@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Kenteken Scanner - Gestolen Check</title>
+    <!-- Tesseract.js voor OCR -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0b1a2e;
+            color: #e0e8f0;
+            padding: 1rem;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .container {
+            max-width: 500px;
+            width: 100%;
+            background: #1a2a3f;
+            border-radius: 24px;
+            padding: 1.5rem;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+        h1 {
+            font-size: 1.5rem;
+            text-align: center;
+            margin-bottom: 0.25rem;
+            color: #7ec8f0;
+        }
+        .subtitle {
+            text-align: center;
+            font-size: 0.9rem;
+            color: #8aa4c0;
+            margin-bottom: 1.5rem;
+        }
+        .camera-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 4/3;
+            background: #0a1420;
+            border-radius: 16px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+            border: 2px solid #2a4a6a;
+        }
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        #canvas {
+            display: none;
+        }
+        .scan-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 70%;
+            height: 30%;
+            border: 3px dashed rgba(126, 200, 240, 0.6);
+            border-radius: 12px;
+            pointer-events: none;
+            box-shadow: 0 0 30px rgba(126, 200, 240, 0.1);
+        }
+        .scan-overlay .label {
+            position: absolute;
+            bottom: -28px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.7rem;
+            color: rgba(126, 200, 240, 0.7);
+            background: #0a1420;
+            padding: 0 10px;
+            white-space: nowrap;
+        }
+        .controls {
+            display: flex;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+        .btn {
+            flex: 1;
+            padding: 0.8rem 1rem;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            min-width: 80px;
+        }
+        .btn-primary {
+            background: #1e6f9f;
+            color: white;
+        }
+        .btn-primary:hover { background: #155a82; }
+        .btn-primary:disabled {
+            background: #3a5a7a;
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .btn-success {
+            background: #2a9d6a;
+            color: white;
+        }
+        .btn-success:hover { background: #1e7a52; }
+        .btn-danger {
+            background: #b33c3c;
+            color: white;
+        }
+        .btn-danger:hover { background: #8f2e2e; }
+        .btn-outline {
+            background: transparent;
+            color: #7ec8f0;
+            border: 2px solid #2a4a6a;
+        }
+        .btn-outline:hover { background: #1a2a3f; }
+        .input-group {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        #kentekenInput {
+            flex: 1;
+            padding: 0.8rem 1rem;
+            border-radius: 12px;
+            border: 2px solid #2a4a6a;
+            background: #0f1f30;
+            color: #e0e8f0;
+            font-size: 1.1rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-weight: 600;
+        }
+        #kentekenInput:focus {
+            outline: none;
+            border-color: #7ec8f0;
+        }
+        #kentekenInput::placeholder {
+            color: #4a6a8a;
+            letter-spacing: 1px;
+            font-weight: 400;
+        }
+        .result-box {
+            background: #0f1f30;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-top: 0.5rem;
+            min-height: 80px;
+            border-left: 4px solid #2a4a6a;
+        }
+        .result-box .status {
+            font-weight: 700;
+            font-size: 1.1rem;
+        }
+        .result-box .status.gestolen {
+            color: #ff6b6b;
+        }
+        .result-box .status.schoon {
+            color: #4ecdc4;
+        }
+        .result-box .status.fout {
+            color: #ffa94d;
+        }
+        .result-box .details {
+            font-size: 0.9rem;
+            color: #8aa4c0;
+            margin-top: 0.4rem;
+            line-height: 1.5;
+        }
+        .result-box .details strong {
+            color: #c0d8e8;
+        }
+        .loading {
+            color: #7ec8f0;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .loading .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #2a4a6a;
+            border-top: 3px solid #7ec8f0;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .footer {
+            text-align: center;
+            font-size: 0.7rem;
+            color: #4a6a8a;
+            margin-top: 1rem;
+        }
+        @media (max-width: 480px) {
+            .container { padding: 1rem; }
+            .btn { font-size: 0.8rem; padding: 0.6rem 0.8rem; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📷 Kenteken Scanner</h1>
+    <p class="subtitle">Scan een kenteken en check of het voertuig gestolen is</p>
+
+    <!-- Camera -->
+    <div class="camera-container">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+        <div class="scan-overlay">
+            <span class="label">Plaats kenteken in het kader</span>
+        </div>
+    </div>
+
+    <!-- Knoppen -->
+    <div class="controls">
+        <button id="scanBtn" class="btn btn-primary">📸 Scan nu</button>
+        <button id="toggleCameraBtn" class="btn btn-outline">📷 Camera</button>
+    </div>
+
+    <!-- Handmatige invoer -->
+    <div class="input-group">
+        <input type="text" id="kentekenInput" placeholder="Bijv. 12-ABC-3" maxlength="12" />
+        <button id="checkBtn" class="btn btn-success">🔍 Check</button>
+    </div>
+
+    <!-- Resultaat -->
+    <div class="result-box" id="resultBox">
+        <div style="color:#4a6a8a; text-align:center; padding:0.5rem;">
+            Scan een kenteken of typ deze handmatig in
+        </div>
+    </div>
+    <div class="footer">Data afkomstig van RDW Open Data · Alleen ter controle</div>
+</div>
+
+<script>
+    (function() {
+        'use strict';
+
+        // --- DOM refs ---
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const scanBtn = document.getElementById('scanBtn');
+        const toggleCameraBtn = document.getElementById('toggleCameraBtn');
+        const kentekenInput = document.getElementById('kentekenInput');
+        const checkBtn = document.getElementById('checkBtn');
+        const resultBox = document.getElementById('resultBox');
+
+        // --- State ---
+        let cameraStream = null;
+        let cameraActive = false;
+        let isScanning = false;
+
+        // --- Camera ---
+        async function startCamera() {
+            try {
+                if (cameraStream) {
+                    cameraStream.getTracks().forEach(t => t.stop());
+                    cameraStream = null;
+                }
+                const constraints = {
+                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }
+                };
+                cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = cameraStream;
+                await video.play();
+                cameraActive = true;
+                toggleCameraBtn.textContent = '📷 Stop';
+                toggleCameraBtn.classList.remove('btn-outline');
+                toggleCameraBtn.classList.add('btn-danger');
+                scanBtn.disabled = false;
+                return true;
+            } catch (err) {
+                console.error('Camera error:', err);
+                setResult('⚠️ Geen camera-toegang. Gebruik de handmatige invoer.', 'fout');
+                return false;
+            }
+        }
+
+        function stopCamera() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(t => t.stop());
+                cameraStream = null;
+            }
+            video.srcObject = null;
+            cameraActive = false;
+            toggleCameraBtn.textContent = '📷 Camera';
+            toggleCameraBtn.classList.remove('btn-danger');
+            toggleCameraBtn.classList.add('btn-outline');
+            scanBtn.disabled = true;
+        }
+
+        async function toggleCamera() {
+            if (cameraActive) {
+                stopCamera();
+            } else {
+                await startCamera();
+            }
+        }
+
+        // --- OCR: scan kenteken ---
+        async function scanLicensePlate() {
+            if (!cameraActive || isScanning) return;
+            isScanning = true;
+            scanBtn.disabled = true;
+            setResult('🔄 Bezig met scannen...', 'loading');
+
+            try {
+                // Capture frame
+                canvas.width = video.videoWidth || 640;
+                canvas.height = video.videoHeight || 480;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // OCR met Tesseract.js
+                const result = await Tesseract.recognize(
+                    canvas,
+                    'nld',
+                    {
+                        logger: (m) => {
+                            if (m.status === 'recognizing text') {
+                                // Progress optional
+                            }
+                        }
+                    }
+                );
+
+                const text = result.data.text;
+                // Zoek Nederlands kentekenformaat: 2-3-2, 3-2-3, 2-2-2, etc.
+                const kentekenMatch = text.match(/\b[A-Z0-9]{2}[- ]?[A-Z0-9]{2}[- ]?[A-Z0-9]{2}\b/i) ||
+                                      text.match(/\b[A-Z0-9]{2}[- ]?[A-Z0-9]{3}[- ]?[A-Z0-9]{1}\b/i) ||
+                                      text.match(/\b[A-Z0-9]{1}[- ]?[A-Z0-9]{3}[- ]?[A-Z0-9]{2}\b/i) ||
+                                      text.match(/\b[A-Z0-9]{3}[- ]?[A-Z0-9]{2}[- ]?[A-Z0-9]{2}\b/i) ||
+                                      text.match(/\b[A-Z0-9]{2}[- ]?[A-Z0-9]{2}[- ]?[A-Z0-9]{2}\b/i);
+
+                if (kentekenMatch) {
+                    let kenteken = kentekenMatch[0].toUpperCase().replace(/\s/g, '');
+                    // Formatteer met streepjes: 12-ABC-3
+                    if (kenteken.length === 6) {
+                        kenteken = kenteken.slice(0,2) + '-' + kenteken.slice(2,4) + '-' + kenteken.slice(4);
+                    } else if (kenteken.length === 7) {
+                        kenteken = kenteken.slice(0,2) + '-' + kenteken.slice(2,5) + '-' + kenteken.slice(5);
+                    } else if (kenteken.length === 8) {
+                        kenteken = kenteken.slice(0,3) + '-' + kenteken.slice(3,5) + '-' + kenteken.slice(5);
+                    } else if (kenteken.length === 9) {
+                        kenteken = kenteken.slice(0,3) + '-' + kenteken.slice(3,6) + '-' + kenteken.slice(6);
+                    }
+                    kentekenInput.value = kenteken;
+                    await checkKenteken(kenteken);
+                } else {
+                    setResult('❌ Geen kenteken herkend. Probeer opnieuw of typ handmatig.', 'fout');
+                }
+            } catch (err) {
+                console.error('Scan error:', err);
+                setResult('❌ Fout tijdens scannen: ' + err.message, 'fout');
+            } finally {
+                isScanning = false;
+                scanBtn.disabled = false;
+            }
+        }
+
+        // --- RDW API check ---
+        async function checkKenteken(kenteken) {
+            // Valideer format: bijv. 12-ABC-3
+            const clean = kenteken.replace(/-/g, '').toUpperCase();
+            if (!/^[A-Z0-9]{6,9}$/.test(clean)) {
+                setResult('⚠️ Ongeldig kentekenformaat. Gebruik bijv. 12-ABC-3', 'fout');
+                return;
+            }
+
+            setResult('🔄 Controleren bij RDW...', 'loading');
+
+            try {
+                // RDW Open Data API (Socrata)
+                // We gebruiken de Gekentekende_voertuigen dataset
+                const query = `https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken=${clean}`;
+                const response = await fetch(query);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (!data || data.length === 0) {
+                    setResult('❌ Kenteken niet gevonden in RDW-register.', 'fout');
+                    return;
+                }
+
+                const voertuig = data[0];
+
+                // Check of het voertuig als gestolen is geregistreerd
+                // Let op: de exacte veldnaam kan variëren. Vaak is het 'voertuigstatus' of 'status'
+                // We checken meerdere mogelijke velden
+                const status = voertuig.voertuigstatus || voertuig.status || '';
+                const isGestolen = status.toLowerCase().includes('gestolen') ||
+                                   status.toLowerCase().includes('ontvreemd') ||
+                                   status.toLowerCase().includes('diefstal');
+
+                // Bouw resultaat
+                let html = '';
+                if (isGestolen) {
+                    html += `<div class="status gestolen">🚨 GESTOLEN! Dit voertuig staat geregistreerd als gestolen.</div>`;
+                } else {
+                    html += `<div class="status schoon">✅ Geen diefstalregistratie gevonden voor dit voertuig.</div>`;
+                }
+
+                html += `<div class="details">`;
+                html += `<strong>Kenteken:</strong> ${voertuig.kenteken || clean}<br>`;
+                html += `<strong>Merk:</strong> ${voertuig.merk || 'Onbekend'}<br>`;
+                html += `<strong>Handelsbenaming:</strong> ${voertuig.handelsbenaming || 'Onbekend'}<br>`;
+                html += `<strong>Voertuigsoort:</strong> ${voertuig.voertuigsoort || 'Onbekend'}<br>`;
+                if (voertuig.vervaldatum_apk) {
+                    html += `<strong>APK vervaldatum:</strong> ${voertuig.vervaldatum_apk}<br>`;
+                }
+                if (status) {
+                    html += `<strong>Status:</strong> ${status}`;
+                }
+                html += `</div>`;
+
+                setResult(html, isGestolen ? 'gestolen' : 'schoon');
+
+            } catch (err) {
+                console.error('RDW API error:', err);
+                setResult('❌ Fout bij RDW-query: ' + err.message, 'fout');
+            }
+        }
+
+        // --- UI helpers ---
+        function setResult(html, type) {
+            if (type === 'loading') {
+                resultBox.innerHTML = `<div class="loading"><span class="spinner"></span> ${html}</div>`;
+            } else {
+                resultBox.innerHTML = html;
+                // Reset class
+                resultBox.className = 'result-box';
+                if (type === 'gestolen') {
+                    resultBox.style.borderLeftColor = '#ff6b6b';
+                } else if (type === 'schoon') {
+                    resultBox.style.borderLeftColor = '#4ecdc4';
+                } else {
+                    resultBox.style.borderLeftColor = '#ffa94d';
+                }
+            }
+        }
+
+        // --- Event listeners ---
+        scanBtn.addEventListener('click', scanLicensePlate);
+
+        toggleCameraBtn.addEventListener('click', toggleCamera);
+
+        checkBtn.addEventListener('click', () => {
+            const kenteken = kentekenInput.value.trim();
+            if (kenteken) {
+                checkKenteken(kenteken);
+            } else {
+                setResult('⚠️ Voer een kenteken in.', 'fout');
+            }
+        });
+
+        kentekenInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                checkBtn.click();
+            }
+        });
+
+        // --- Init ---
+        // Probeer camera te starten
+        startCamera().then(success => {
+            if (!success) {
+                setResult('📱 Geen camera? Typ het kenteken handmatig in.', 'fout');
+            }
+        });
+
+        console.log('📷 Kenteken Scanner gestart.');
+        console.log('ℹ️ Gebruik de RDW Open Data API: https://opendata.rdw.nl/');
+    })();
+</script>
+</body>
+</html>
