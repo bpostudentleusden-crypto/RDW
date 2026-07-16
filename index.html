@@ -358,8 +358,8 @@
         let scanInterval = null;
         let lastScannedKenteken = '';
         let isProcessing = false;
-        let scanCount = 0;
         let detectionTimeout = null;
+        let scanWorker = null;
 
         // --- Camera ---
         async function startCamera() {
@@ -369,7 +369,7 @@
                     cameraStream = null;
                 }
                 const constraints = {
-                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }
+                    video: { facingMode: 'environment', width: { ideal: 320 }, height: { ideal: 240 } }
                 };
                 cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = cameraStream;
@@ -383,7 +383,6 @@
                 toggleCameraBtn.className = 'btn btn-danger';
                 scanStatus.textContent = '🔄 Scannen actief... wacht op kenteken';
                 hintMessage.textContent = '✅ Camera actief – automatisch scannen gestart';
-                // Start automatisch scannen
                 startAutoScan();
                 return true;
             } catch (err) {
@@ -467,54 +466,44 @@
                 return;
             }
 
-            // Stel overlay canvas in op dezelfde grootte als de video
-            overlayCanvas.width = video.videoWidth || 640;
-            overlayCanvas.height = video.videoHeight || 480;
-
-            // Wis vorige tekeningen
+            overlayCanvas.width = video.videoWidth || 320;
+            overlayCanvas.height = video.videoHeight || 240;
             overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
-            // Teken een groen kader rond het herkende kenteken
             const x = bbox.x0 || 0;
             const y = bbox.y0 || 0;
             const width = (bbox.x1 || 0) - x;
             const height = (bbox.y1 || 0) - y;
 
-            // Controleer of de bounding box geldig is
             if (width > 10 && height > 10) {
-                // Teken het kader op de overlay canvas
                 overlayCtx.strokeStyle = '#4ecdc4';
                 overlayCtx.lineWidth = 4;
                 overlayCtx.shadowColor = 'rgba(78, 205, 196, 0.6)';
                 overlayCtx.shadowBlur = 20;
                 overlayCtx.strokeRect(x, y, width, height);
-
-                // Teken een glow effect
                 overlayCtx.shadowBlur = 40;
                 overlayCtx.shadowColor = 'rgba(78, 205, 196, 0.3)';
                 overlayCtx.strokeRect(x, y, width, height);
-
-                // Zet de detection box ook zichtbaar als extra visuele feedback
-                // We gebruiken de overlay canvas als primaire visualisatie
                 detectionBox.classList.remove('active');
             } else {
                 detectionBox.classList.remove('active');
             }
         }
 
-        // --- Verbeterde OCR met focus op Nederlandse kentekens ---
+        // --- Snelle OCR met lagere resolutie ---
         async function performAutoScan() {
             if (!cameraActive || isProcessing) return;
             isProcessing = true;
-            scanCount++;
 
             try {
-                // Capture frame
-                canvas.width = video.videoWidth || 640;
-                canvas.height = video.videoHeight || 480;
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                // Capture frame met lagere resolutie voor snellere verwerking
+                const captureWidth = 320;
+                const captureHeight = 240;
+                canvas.width = captureWidth;
+                canvas.height = captureHeight;
+                ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
 
-                // OCR met Tesseract.js
+                // Snelle OCR met beperkte karakter set en lage resolutie
                 const result = await Tesseract.recognize(
                     canvas,
                     'nld',
@@ -522,7 +511,8 @@
                         logger: (m) => {},
                         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ',
                         tessedit_pageseg_mode: '7',
-                        tessedit_ocr_engine_mode: '3'
+                        tessedit_ocr_engine_mode: '3',
+                        tessedit_do_invert: false
                     }
                 );
 
@@ -551,17 +541,23 @@
                 let kentekenMatch = null;
                 let matchedBbox = null;
                 
-                // Zoek naar kenteken in de tekst
                 for (const pattern of patterns) {
                     const match = text.match(pattern);
                     if (match) {
                         kentekenMatch = match;
-                        // Probeer de bounding box van het gevonden woord te vinden
                         const word = result.data.words.find(w => 
                             w.text.toUpperCase().replace(/\s/g, '') === match[0].toUpperCase().replace(/\s/g, '')
                         );
                         if (word && word.bbox) {
-                            matchedBbox = word.bbox;
+                            // Schaal bbox terug naar originele resolutie
+                            const scaleX = video.videoWidth / captureWidth;
+                            const scaleY = video.videoHeight / captureHeight;
+                            matchedBbox = {
+                                x0: word.bbox.x0 * scaleX,
+                                y0: word.bbox.y0 * scaleY,
+                                x1: word.bbox.x1 * scaleX,
+                                y1: word.bbox.y1 * scaleY
+                            };
                         }
                         break;
                     }
@@ -582,7 +578,6 @@
                     }
 
                     if (isValidDutchLicensePlate(kenteken)) {
-                        // Toon detectiekader
                         if (matchedBbox) {
                             showDetectionBox(matchedBbox);
                         }
@@ -593,7 +588,6 @@
                             scanStatus.textContent = `🔍 Kenteken gevonden: ${kenteken} - checken...`;
                             await checkKenteken(kenteken);
                             
-                            // Verwijder detectiekader na 2 seconden
                             if (detectionTimeout) {
                                 clearTimeout(detectionTimeout);
                             }
@@ -614,7 +608,6 @@
                             scanStatus.textContent.includes('Scannen actief') === false) {
                             scanStatus.textContent = '🔄 Scannen actief... zoekend naar kenteken';
                         }
-                        // Verberg detectiekader als er geen geldig kenteken is
                         showDetectionBox(null);
                     }
                 } else {
@@ -622,7 +615,6 @@
                         scanStatus.textContent.includes('Scannen actief') === false) {
                         scanStatus.textContent = '🔄 Scannen actief... wacht op kenteken';
                     }
-                    // Verberg detectiekader
                     showDetectionBox(null);
                 }
             } catch (err) {
@@ -747,7 +739,7 @@
         hintMessage.textContent = 'Klik op "Start camera" om automatisch scannen te starten.';
         setResult('📱 Klik op "Start camera" en geef toestemming voor de camera.', '');
 
-        console.log('📷 Kenteken Scanner gestart (0.4s interval, met detectiekader).');
+        console.log('📷 Kenteken Scanner gestart (geoptimaliseerd voor snelheid).');
     })();
 </script>
 </body>
