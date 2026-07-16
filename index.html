@@ -7,7 +7,7 @@
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js">
     </script>
     <style>
-        /* Stijlen ongewijzigd, behalve toevoeging history etc. */
+        /* Stijlen exact zoals voorheen - niet gewijzigd */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -559,7 +559,7 @@
                 }
             }
 
-            // --- Verbeterde kleurdetectie (bredere drempels, ook wit/grijs) ---
+            // --- VERBETERDE KLEURDETECTIE (grotere zoekradius, meer kleuren) ---
             function findPlateRegion(imageData, width, height) {
                 const data = imageData.data;
                 let minX = width,
@@ -567,7 +567,7 @@
                     maxX = 0,
                     maxY = 0;
                 let found = false;
-                const step = 3; // fijnere scan
+                const step = 2; // fijnere scan voor kleine platen
 
                 for (let y = 0; y < height; y += step) {
                     for (let x = 0; x < width; x += step) {
@@ -576,14 +576,17 @@
                         const g = data[idx + 1];
                         const b = data[idx + 2];
 
-                        // Geel: R en G hoog, B laag (bredere drempels)
-                        const isYellow = (r > 130 && g > 130 && b < 120 && r > b + 20 && g > b + 20);
-                        // Blauw: B hoog, R en G laag (breder)
-                        const isBlue = (b > 100 && r < 140 && g < 140 && b > r + 20 && b > g + 20);
-                        // Wit/grijs (voor oude platen): alle waarden rond 180-220
-                        const isWhite = (r > 160 && g > 160 && b > 160 && Math.abs(r - g) < 30 && Math.abs(g - b) < 30);
+                        // Geel (modern) – bredere drempels
+                        const isYellow = (r > 120 && g > 120 && b < 130 && r > b + 15 && g > b + 15);
+                        // Blauw (oud) – breder
+                        const isBlue = (b > 90 && r < 150 && g < 150 && b > r + 15 && b > g + 15);
+                        // Wit/grijs (oude platen) – alle kleuren rond 180-240
+                        const isWhite = (r > 150 && g > 150 && b > 150 && Math.abs(r - g) < 40 && Math.abs(g - b) < 40);
+                        // Donker (zwarte letters op lichte achtergrond) – hoge contrast
+                        const isHighContrast = (Math.abs(r - g) > 30 || Math.abs(g - b) > 30 || Math.abs(r - b) > 30) &&
+                            (r + g + b) > 200;
 
-                        if (isYellow || isBlue || isWhite) {
+                        if (isYellow || isBlue || isWhite || isHighContrast) {
                             found = true;
                             if (x < minX) minX = x;
                             if (x > maxX) maxX = x;
@@ -593,8 +596,8 @@
                     }
                 }
 
-                if (found && maxX - minX > 30 && maxY - minY > 15) {
-                    const margin = 25;
+                if (found && maxX - minX > 20 && maxY - minY > 10) {
+                    const margin = 30;
                     return {
                         x: Math.max(0, minX - margin),
                         y: Math.max(0, minY - margin),
@@ -649,7 +652,7 @@
                 }
             }
 
-            // --- Verbeterde voorbewerking (adaptieve threshold) ---
+            // --- Voorbewerking (adaptieve threshold met hogere resolutie) ---
             function preprocessImage(sourceCanvas) {
                 const w = sourceCanvas.width;
                 const h = sourceCanvas.height;
@@ -660,7 +663,7 @@
                 tempCtx.drawImage(sourceCanvas, 0, 0);
                 const imageData = tempCtx.getImageData(0, 0, w, h);
                 const data = imageData.data;
-                // Eenvoudige adaptieve threshold: bereken gemiddelde van lokale buurt (vereenvoudigd: globaal gemiddelde)
+                // Eenvoudige adaptieve threshold
                 let sum = 0;
                 for (let i = 0; i < data.length; i += 4) {
                     const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
@@ -670,7 +673,7 @@
                     sum += gray;
                 }
                 const avg = sum / (data.length / 4);
-                const threshold = avg * 0.8; // iets onder gemiddelde voor betere contrast
+                const threshold = avg * 0.85;
                 for (let i = 0; i < data.length; i += 4) {
                     const val = data[i] > threshold ? 255 : 0;
                     data[i] = val;
@@ -718,8 +721,8 @@
                         });
 
                         const tempCanvas = document.createElement('canvas');
-                        // Verhoog resolutie voor betere OCR (2x)
-                        const scale = 2;
+                        // Resolutie 3x voor betere herkenning
+                        const scale = 3;
                         tempCanvas.width = cropW * scale;
                         tempCanvas.height = cropH * scale;
                         const tempCtx = tempCanvas.getContext('2d');
@@ -727,7 +730,7 @@
                         cropCanvas = tempCanvas;
                     } else {
                         showDetectionBox(null);
-                        // Geen plaat gevonden, maar gebruik toch het hele beeld (iets groter)
+                        // Geen plaat gevonden, gebruik hele beeld (iets groter)
                         const tempCanvas = document.createElement('canvas');
                         tempCanvas.width = captureWidth;
                         tempCanvas.height = captureHeight;
@@ -736,7 +739,6 @@
                         cropCanvas = tempCanvas;
                     }
 
-                    // Voorbewerking
                     const processedCanvas = preprocessImage(cropCanvas);
 
                     const result = await Tesseract.recognize(
@@ -828,13 +830,13 @@
                 }
             }
 
-            // --- Automatisch scannen met 300ms interval ---
+            // --- Sneller scaninterval (250ms) ---
             function startAutoScan() {
                 if (scanInterval) clearInterval(scanInterval);
                 scanInterval = setInterval(() => {
                     if (!cameraActive || isProcessing) return;
                     performScan();
-                }, 300);
+                }, 250);
             }
 
             // --- Handmatige scan ---
@@ -843,7 +845,7 @@
                 await performScan();
             }
 
-            // --- UITERST ROBIJNSTE RDW CHECK (hele response doorzoeken) ---
+            // --- ULTRA ROBUISTE RDW CHECK (alle velden, booleans, geneste objecten) ---
             async function checkKenteken(kenteken) {
                 const clean = kenteken.replace(/[- ]/g, '').toUpperCase();
                 if (!/^[A-Z0-9]{6,9}$/.test(clean)) {
@@ -854,7 +856,7 @@
                 setResult('🔄 Controleren bij RDW...', 'loading');
 
                 try {
-                    // Eerste dataset
+                    // Eerste dataset (voertuig)
                     const url1 = `https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken=${clean}&$select=*`;
                     const response1 = await fetch(url1);
                     if (!response1.ok) throw new Error(`HTTP ${response1.status}`);
@@ -864,36 +866,59 @@
                     let isGestolen = false;
                     let gevondenStatus = 'Onbekend';
 
-                    // Als data1 niet leeg is
-                    if (data1 && data1.length > 0) {
-                        voertuig = data1[0];
-                        // Doorzoek alle velden van het object
-                        const jsonString = JSON.stringify(voertuig).toLowerCase();
-                        if (jsonString.includes('gestolen') || jsonString.includes('ontvreemd') || jsonString.includes(
-                            'diefstal')) {
-                            isGestolen = true;
-                            // Probeer de exacte statuswaarde te vinden uit een veld
-                            for (const [key, value] of Object.entries(voertuig)) {
-                                if (value && typeof value === 'string') {
-                                    const lower = value.toLowerCase();
-                                    if (lower.includes('gestolen') || lower.includes('ontvreemd') || lower.includes(
-                                        'diefstal')) {
-                                        gevondenStatus = value;
-                                        break;
+                    // Hulpfunctie om recursief te zoeken naar 'gestolen' in object
+                    function searchForStolen(obj) {
+                        if (!obj) return false;
+                        if (typeof obj === 'string') {
+                            const lower = obj.toLowerCase();
+                            return lower.includes('gestolen') || lower.includes('ontvreemd') || lower.includes('diefstal');
+                        }
+                        if (typeof obj === 'boolean') return obj === true;
+                        if (Array.isArray(obj)) {
+                            for (let item of obj) {
+                                if (searchForStolen(item)) return true;
+                            }
+                            return false;
+                        }
+                        if (typeof obj === 'object') {
+                            for (let key in obj) {
+                                if (key.toLowerCase().includes('gestolen') || key.toLowerCase().includes('status')) {
+                                    const val = obj[key];
+                                    if (typeof val === 'string' && (val.toLowerCase().includes('gestolen') || val
+                                            .toLowerCase().includes('ontvreemd') || val.toLowerCase().includes(
+                                            'diefstal'))) {
+                                        gevondenStatus = val;
+                                        return true;
+                                    }
+                                    if (typeof val === 'boolean' && val === true) {
+                                        gevondenStatus = 'Gestolen (boolean)';
+                                        return true;
                                     }
                                 }
+                                if (searchForStolen(obj[key])) {
+                                    // probeer de waarde te pakken
+                                    if (typeof obj[key] === 'string') gevondenStatus = obj[key];
+                                    return true;
+                                }
                             }
-                            if (gevondenStatus === 'Onbekend') gevondenStatus = 'Gestolen (gedetecteerd)';
-                        } else {
-                            // Geen diefstal gevonden, probeer voertuigstatus
-                            if (voertuig.voertuigstatus) {
-                                gevondenStatus = voertuig.voertuigstatus;
-                            } else {
-                                gevondenStatus = 'Geen bijzonderheden';
-                            }
+                            return false;
                         }
-                    } else {
-                        // Probeer tweede dataset
+                        return false;
+                    }
+
+                    // Doorzoek eerste dataset
+                    if (data1 && data1.length > 0) {
+                        voertuig = data1[0];
+                        isGestolen = searchForStolen(voertuig);
+                        if (!isGestolen && voertuig.voertuigstatus) {
+                            gevondenStatus = voertuig.voertuigstatus;
+                        } else if (!isGestolen) {
+                            gevondenStatus = 'Geen bijzonderheden';
+                        }
+                    }
+
+                    // Als niet gevonden, probeer tweede dataset (kenteken)
+                    if (!voertuig || !isGestolen) {
                         const url2 = `https://opendata.rdw.nl/resource/8ys7-d773.json?kenteken=${clean}&$select=*`;
                         try {
                             const response2 = await fetch(url2);
@@ -901,30 +926,18 @@
                                 const data2 = await response2.json();
                                 if (data2 && data2.length > 0) {
                                     voertuig = data2[0];
-                                    const jsonString = JSON.stringify(voertuig).toLowerCase();
-                                    if (jsonString.includes('gestolen') || jsonString.includes('ontvreemd') || jsonString
-                                        .includes('diefstal')) {
-                                        isGestolen = true;
-                                        for (const [key, value] of Object.entries(voertuig)) {
-                                            if (value && typeof value === 'string') {
-                                                const lower = value.toLowerCase();
-                                                if (lower.includes('gestolen') || lower.includes('ontvreemd') || lower
-                                                    .includes('diefstal')) {
-                                                    gevondenStatus = value;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        if (gevondenStatus === 'Onbekend') gevondenStatus = 'Gestolen (gedetecteerd)';
-                                    } else {
-                                        if (voertuig.voertuigstatus) gevondenStatus = voertuig.voertuigstatus;
-                                        else gevondenStatus = 'Geen bijzonderheden';
+                                    isGestolen = searchForStolen(voertuig);
+                                    if (!isGestolen && voertuig.voertuigstatus) {
+                                        gevondenStatus = voertuig.voertuigstatus;
+                                    } else if (!isGestolen) {
+                                        gevondenStatus = 'Geen bijzonderheden';
                                     }
                                 }
                             }
                         } catch (e) { /* negeer */ }
                     }
 
+                    // Als nog steeds geen voertuig, meld niet gevonden
                     if (!voertuig) {
                         setResult('❌ Kenteken niet gevonden in RDW-register.', 'fout');
                         scanStatus.textContent = `❌ ${kenteken} niet gevonden`;
@@ -999,7 +1012,7 @@
             scanOverlay.classList.add('active');
             hintMessage.textContent = 'Klik op "Start camera" om te beginnen. Gebruik "Scan nu" voor handmatige scan.';
             setResult('📱 Klik op "Start camera" en geef toestemming voor de camera.', '');
-            console.log('Kenteken Scanner gestart met snellere scanning en verbeterde RDW-check.');
+            console.log('Kenteken Scanner gestart met verbeterde RDW (recursieve zoektocht) en snellere scanning.');
         })();
     </script>
 </body>
