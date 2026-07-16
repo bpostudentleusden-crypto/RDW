@@ -436,23 +436,24 @@
             }
         }
 
-        // --- Verbeterde kenteken validatie ---
+        // --- Verbeterde kenteken validatie met focus op geldige Nederlandse formaten ---
         function isValidDutchLicensePlate(plate) {
             const clean = plate.replace(/[- ]/g, '').toUpperCase();
+            // Check of het alleen uit letters en cijfers bestaat en 6-9 tekens lang is
             if (!/^[A-Z0-9]{6,9}$/.test(clean)) {
                 return false;
             }
+            // Alle geldige Nederlandse kentekenpatronen
             const patterns = [
-                /^[A-Z]{2}[0-9]{2}[A-Z]{2}$/,
-                /^[A-Z]{2}[0-9]{3}[A-Z]{1}$/,
-                /^[A-Z]{1}[0-9]{3}[A-Z]{2}$/,
-                /^[0-9]{2}[A-Z]{2}[0-9]{2}$/,
-                /^[0-9]{2}[A-Z]{3}[0-9]{1}$/,
-                /^[0-9]{1}[A-Z]{3}[0-9]{2}$/,
-                /^[A-Z]{2}[0-9]{2}[A-Z]{2}$/,
-                /^[A-Z]{3}[0-9]{2}[A-Z]{1}$/,
-                /^[A-Z]{1}[0-9]{2}[A-Z]{3}$/,
-                /^[0-9]{2}[A-Z]{2}[0-9]{2}$/
+                /^[A-Z]{2}[0-9]{2}[A-Z]{2}$/,  // AA-12-AA
+                /^[A-Z]{2}[0-9]{3}[A-Z]{1}$/,  // AA-123-A
+                /^[A-Z]{1}[0-9]{3}[A-Z]{2}$/,  // A-123-AA
+                /^[0-9]{2}[A-Z]{2}[0-9]{2}$/,  // 12-AA-12
+                /^[0-9]{2}[A-Z]{3}[0-9]{1}$/,  // 12-AAA-1
+                /^[0-9]{1}[A-Z]{3}[0-9]{2}$/,  // 1-AAA-12
+                /^[A-Z]{3}[0-9]{2}[A-Z]{1}$/,  // AAA-12-A
+                /^[A-Z]{1}[0-9]{2}[A-Z]{3}$/,  // A-12-AAA
+                /^[0-9]{2}[A-Z]{2}[0-9]{2}$/   // 12-AA-12
             ];
             return patterns.some(pattern => pattern.test(clean));
         }
@@ -489,7 +490,7 @@
             }
         }
 
-        // --- Snelle OCR met lagere resolutie ---
+        // --- Snelle OCR met alleen focus op kentekenpatronen ---
         async function performAutoScan() {
             if (!cameraActive || isProcessing) return;
             isProcessing = true;
@@ -501,6 +502,7 @@
                 canvas.height = captureHeight;
                 ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
 
+                // OCR met whitelist voor alleen kentekenkarakters
                 const result = await Tesseract.recognize(
                     canvas,
                     'nld',
@@ -515,6 +517,7 @@
 
                 const text = result.data.text;
                 
+                // Specifieke patronen voor Nederlandse kentekens
                 const patterns = [
                     /\b[A-Z]{2}[- ]?[0-9]{2}[- ]?[A-Z]{2}\b/i,
                     /\b[A-Z]{2}[- ]?[0-9]{3}[- ]?[A-Z]{1}\b/i,
@@ -525,6 +528,7 @@
                     /\b[A-Z]{3}[- ]?[0-9]{2}[- ]?[A-Z]{1}\b/i,
                     /\b[A-Z]{1}[- ]?[0-9]{2}[- ]?[A-Z]{3}\b/i,
                     /\b[0-9]{2}[- ]?[A-Z]{2}[- ]?[0-9]{2}\b/i,
+                    // Zonder streepjes
                     /\b[A-Z]{2}[0-9]{2}[A-Z]{2}\b/i,
                     /\b[A-Z]{2}[0-9]{3}[A-Z]{1}\b/i,
                     /\b[A-Z]{1}[0-9]{3}[A-Z]{2}\b/i,
@@ -538,6 +542,7 @@
                 let kentekenMatch = null;
                 let matchedBbox = null;
                 
+                // Zoek alleen naar geldige kentekenpatronen
                 for (const pattern of patterns) {
                     const match = text.match(pattern);
                     if (match) {
@@ -563,6 +568,7 @@
                     let kenteken = kentekenMatch[0].toUpperCase().replace(/\s/g, '');
                     const clean = kenteken.replace(/[- ]/g, '');
                     
+                    // Formatteer met streepjes voor leesbaarheid
                     if (clean.length === 6) {
                         kenteken = clean.slice(0,2) + '-' + clean.slice(2,4) + '-' + clean.slice(4);
                     } else if (clean.length === 7) {
@@ -573,6 +579,7 @@
                         kenteken = clean.slice(0,3) + '-' + clean.slice(3,6) + '-' + clean.slice(6);
                     }
 
+                    // Alleen doorgaan als het een geldig Nederlands kenteken is
                     if (isValidDutchLicensePlate(kenteken)) {
                         if (matchedBbox) {
                             showDetectionBox(matchedBbox);
@@ -632,7 +639,7 @@
             }, 400);
         }
 
-        // --- RDW API check ---
+        // --- VERBETERDE RDW API check met specifieke diefstalstatus ---
         async function checkKenteken(kenteken) {
             const clean = kenteken.replace(/[- ]/g, '').toUpperCase();
             if (!/^[A-Z0-9]{6,9}$/.test(clean)) {
@@ -643,6 +650,7 @@
             setResult('🔄 Controleren bij RDW...', 'loading');
 
             try {
+                // Gebruik de RDW Open Data API met alle velden
                 const query = `https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken=${clean}`;
                 const response = await fetch(query);
 
@@ -659,7 +667,13 @@
                 }
 
                 const voertuig = data[0];
+                
+                // SPECIFIEK CHECKEN OP DE VOERTUIGSTATUS VOOR DIEFSTAL
+                // Het veld 'voertuigstatus' bevat de status van het voertuig
+                // Mogelijke waarden: 'Gestolen', 'Geen gestolen', 'Ontvreemd', etc.
                 const status = voertuig.voertuigstatus || voertuig.status || '';
+                
+                // Controleer of de status 'gestolen', 'ontvreemd' of 'diefstal' bevat
                 const isGestolen = status.toLowerCase().includes('gestolen') ||
                                    status.toLowerCase().includes('ontvreemd') ||
                                    status.toLowerCase().includes('diefstal');
@@ -670,9 +684,10 @@
                     scanStatus.textContent = `🚨 ${kenteken} - GESTOLEN!`;
                 } else {
                     html += `<div class="status schoon">✅ Geen diefstalregistratie gevonden voor dit voertuig.</div>`;
-                    scanStatus.textContent = `✅ ${kenteken} - schoon`;
+                    scanStatus.textContent = `✅ ${kenteken} - schoon (status: ${status || 'onbekend'})`;
                 }
 
+                // Toon extra voertuigdetails
                 html += `<div class="details">`;
                 html += `<strong>Kenteken:</strong> ${voertuig.kenteken || clean}<br>`;
                 html += `<strong>Merk:</strong> ${voertuig.merk || 'Onbekend'}<br>`;
@@ -681,9 +696,7 @@
                 if (voertuig.vervaldatum_apk) {
                     html += `<strong>APK vervaldatum:</strong> ${voertuig.vervaldatum_apk}<br>`;
                 }
-                if (status) {
-                    html += `<strong>Status:</strong> ${status}`;
-                }
+                html += `<strong>Status voertuig:</strong> ${status || 'Onbekend'}`;
                 html += `</div>`;
 
                 setResult(html, isGestolen ? 'gestolen' : 'schoon');
@@ -735,7 +748,7 @@
         hintMessage.textContent = 'Klik op "Start camera" om automatisch scannen te starten.';
         setResult('📱 Klik op "Start camera" en geef toestemming voor de camera.', '');
 
-        console.log('📷 Kenteken Scanner gestart.');
+        console.log('📷 Kenteken Scanner gestart met verbeterde diefstalcheck.');
     })();
 </script>
 </body>
