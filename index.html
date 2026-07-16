@@ -321,6 +321,52 @@
         .rdw-link:hover {
             background: #155a82;
         }
+
+        /* Historie stijlen */
+        .history-container {
+            margin-top: 1rem;
+            max-height: 200px;
+            overflow-y: auto;
+            background: #0f1f30;
+            border-radius: 12px;
+            padding: 0.5rem;
+            border: 1px solid #2a4a6a;
+        }
+        .history-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.4rem 0.6rem;
+            border-bottom: 1px solid #1a2a3f;
+            font-size: 0.85rem;
+        }
+        .history-item:last-child {
+            border-bottom: none;
+        }
+        .history-item .h-kenteken {
+            font-weight: 600;
+            letter-spacing: 1px;
+            color: #7ec8f0;
+        }
+        .history-item .h-status {
+            font-weight: 600;
+        }
+        .history-item .h-status.gestolen {
+            color: #ff6b6b;
+        }
+        .history-item .h-status.schoon {
+            color: #4ecdc4;
+        }
+        .history-item .h-tijd {
+            font-size: 0.7rem;
+            color: #6a8aa0;
+        }
+        .history-empty {
+            color: #4a6a8a;
+            text-align: center;
+            padding: 0.5rem;
+            font-size: 0.85rem;
+        }
         @media (max-width: 480px) {
             .container {
                 padding: 1rem;
@@ -375,6 +421,16 @@
                 Scan een kenteken of typ deze handmatig in
             </div>
         </div>
+
+        <!-- Historie -->
+        <div style="margin-top:0.8rem; display:flex; justify-content:space-between; align-items:center;">
+            <span style="color:#7ec8f0; font-weight:600; font-size:0.9rem;">📜 Historie</span>
+            <button id="clearHistoryBtn" class="btn btn-outline" style="flex:0; padding:0.2rem 0.8rem; font-size:0.7rem;">Wis</button>
+        </div>
+        <div class="history-container" id="historyContainer">
+            <div class="history-empty">Nog geen scans</div>
+        </div>
+
         <div class="hint" id="hintMessage"></div>
         <div class="footer">Data afkomstig van RDW Open Data · Alleen ter controle</div>
     </div>
@@ -399,6 +455,8 @@
             const hintMessage = document.getElementById('hintMessage');
             const scanStatus = document.getElementById('scanStatus');
             const detectionBox = document.getElementById('detectionBox');
+            const historyContainer = document.getElementById('historyContainer');
+            const clearHistoryBtn = document.getElementById('clearHistoryBtn');
 
             // --- State ---
             let cameraStream = null;
@@ -407,6 +465,41 @@
             let lastScannedKenteken = '';
             let isProcessing = false;
             let detectionTimeout = null;
+            let history = []; // array van {kenteken, status, gestolen, tijd}
+
+            // --- Historie functies ---
+            function addHistory(kenteken, status, gestolen) {
+                const now = new Date();
+                const tijd = now.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                history.unshift({ kenteken, status, gestolen, tijd });
+                if (history.length > 50) history.pop(); // max 50 items
+                renderHistory();
+            }
+
+            function renderHistory() {
+                if (history.length === 0) {
+                    historyContainer.innerHTML = `<div class="history-empty">Nog geen scans</div>`;
+                    return;
+                }
+                let html = '';
+                history.forEach(item => {
+                    const statusClass = item.gestolen ? 'gestolen' : 'schoon';
+                    const statusText = item.gestolen ? '🚨 Gestolen' : '✅ Schoon';
+                    html += `
+                        <div class="history-item">
+                            <span class="h-kenteken">${item.kenteken}</span>
+                            <span class="h-status ${statusClass}">${statusText}</span>
+                            <span class="h-tijd">${item.tijd}</span>
+                        </div>
+                    `;
+                });
+                historyContainer.innerHTML = html;
+            }
+
+            function clearHistory() {
+                history = [];
+                renderHistory();
+            }
 
             // --- Camera ---
             async function startCamera() {
@@ -574,6 +667,35 @@
                 }
             }
 
+            // --- Verbeterde voorbewerking voor OCR (contrast, grijswaarden) ---
+            function preprocessImage(sourceCanvas) {
+                const w = sourceCanvas.width;
+                const h = sourceCanvas.height;
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = w;
+                tempCanvas.height = h;
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCtx.drawImage(sourceCanvas, 0, 0);
+
+                const imageData = tempCtx.getImageData(0, 0, w, h);
+                const data = imageData.data;
+                // Grijswaarden en contrastverhoging (threshold)
+                for (let i = 0; i < data.length; i += 4) {
+                    const r = data[i];
+                    const g = data[i + 1];
+                    const b = data[i + 2];
+                    // Grijswaarde (luminantie)
+                    const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                    // Threshold op 128 (eenvoudige binarisatie)
+                    const val = gray > 128 ? 255 : 0;
+                    data[i] = val;
+                    data[i + 1] = val;
+                    data[i + 2] = val;
+                }
+                tempCtx.putImageData(imageData, 0, 0);
+                return tempCanvas;
+            }
+
             // --- OCR en kentekenherkenning ---
             async function performScan() {
                 if (!cameraActive || isProcessing) return;
@@ -620,8 +742,12 @@
                         showDetectionBox(null);
                     }
 
+                    // Voorbewerking voor betere OCR
+                    const processedCanvas = preprocessImage(cropCanvas);
+
+                    // OCR op de voorbewerkte afbeelding
                     const result = await Tesseract.recognize(
-                        cropCanvas,
+                        processedCanvas,
                         'nld', {
                             logger: (m) => {},
                             tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ',
@@ -725,7 +851,7 @@
                 await performScan();
             }
 
-            // --- VERBETERDE RDW CHECK - Doorzoekt alle velden ---
+            // --- VERBETERDE RDW CHECK met twee API's ---
             async function checkKenteken(kenteken) {
                 const clean = kenteken.replace(/[- ]/g, '').toUpperCase();
                 if (!/^[A-Z0-9]{6,9}$/.test(clean)) {
@@ -736,52 +862,95 @@
                 setResult('🔄 Controleren bij RDW...', 'loading');
 
                 try {
-                    // Query met $select=* om alle velden op te halen
-                    const url =
-                        `https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken=${clean}&$select=*`;
-                    const response = await fetch(url);
+                    // Eerste API: algemene voertuigdataset
+                    const url1 = `https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken=${clean}&$select=*`;
+                    const response1 = await fetch(url1);
+                    if (!response1.ok) throw new Error(`HTTP ${response1.status}`);
+                    const data1 = await response1.json();
 
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-                    const data = await response.json();
-
-                    if (!data || data.length === 0) {
-                        setResult('❌ Kenteken niet gevonden in RDW-register.', 'fout');
-                        scanStatus.textContent = `❌ ${kenteken} niet gevonden`;
-                        return;
-                    }
-
-                    const voertuig = data[0];
-
-                    // Zoek naar status in alle velden
+                    let voertuig = null;
+                    let statusGevonden = false;
                     let gevondenStatus = null;
                     let isGestolen = false;
 
-                    // Doorloop alle sleutels van het object
-                    for (const [key, value] of Object.entries(voertuig)) {
-                        if (value && typeof value === 'string') {
-                            const lower = value.toLowerCase();
-                            if (lower.includes('gestolen') || lower.includes('ontvreemd') || lower.includes('diefstal')) {
+                    // Verwerk eerste dataset
+                    if (data1 && data1.length > 0) {
+                        voertuig = data1[0];
+                        // Doorzoek alle velden
+                        for (const [key, value] of Object.entries(voertuig)) {
+                            if (value && typeof value === 'string') {
+                                const lower = value.toLowerCase();
+                                if (lower.includes('gestolen') || lower.includes('ontvreemd') || lower.includes(
+                                    'diefstal')) {
+                                    isGestolen = true;
+                                    gevondenStatus = value;
+                                    statusGevonden = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!statusGevonden && voertuig.voertuigstatus) {
+                            gevondenStatus = voertuig.voertuigstatus;
+                            statusGevonden = true;
+                            if (gevondenStatus.toLowerCase().includes('gestolen') ||
+                                gevondenStatus.toLowerCase().includes('ontvreemd') ||
+                                gevondenStatus.toLowerCase().includes('diefstal')) {
                                 isGestolen = true;
-                                gevondenStatus = value;
-                                break;
                             }
                         }
                     }
 
-                    // Als we geen status hebben gevonden, gebruik dan voertuigstatus
-                    if (!gevondenStatus && voertuig.voertuigstatus) {
-                        gevondenStatus = voertuig.voertuigstatus;
-                        if (gevondenStatus.toLowerCase().includes('gestolen') ||
-                            gevondenStatus.toLowerCase().includes('ontvreemd') ||
-                            gevondenStatus.toLowerCase().includes('diefstal')) {
-                            isGestolen = true;
+                    // Als geen status gevonden in eerste dataset, probeer tweede dataset (kenteken)
+                    if (!statusGevonden) {
+                        const url2 = `https://opendata.rdw.nl/resource/8ys7-d773.json?kenteken=${clean}&$select=*`;
+                        try {
+                            const response2 = await fetch(url2);
+                            if (response2.ok) {
+                                const data2 = await response2.json();
+                                if (data2 && data2.length > 0) {
+                                    const voertuig2 = data2[0];
+                                    for (const [key, value] of Object.entries(voertuig2)) {
+                                        if (value && typeof value === 'string') {
+                                            const lower = value.toLowerCase();
+                                            if (lower.includes('gestolen') || lower.includes('ontvreemd') || lower
+                                                .includes('diefstal')) {
+                                                isGestolen = true;
+                                                gevondenStatus = value;
+                                                statusGevonden = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (!statusGevonden && voertuig2.voertuigstatus) {
+                                        gevondenStatus = voertuig2.voertuigstatus;
+                                        statusGevonden = true;
+                                        if (gevondenStatus.toLowerCase().includes('gestolen') ||
+                                            gevondenStatus.toLowerCase().includes('ontvreemd') ||
+                                            gevondenStatus.toLowerCase().includes('diefstal')) {
+                                            isGestolen = true;
+                                        }
+                                    }
+                                    // Gebruik dit voertuig voor details (als eerste leeg was)
+                                    if (!voertuig) voertuig = voertuig2;
+                                }
+                            }
+                        } catch (e) {
+                            console.log('Tweede dataset niet beschikbaar:', e);
                         }
                     }
 
-                    // Als nog steeds geen status, gebruik dan een standaardwaarde
-                    if (!gevondenStatus) {
+                    // Als nog steeds geen status, zet op 'Onbekend'
+                    if (!statusGevonden) {
                         gevondenStatus = 'Onbekend';
+                    }
+
+                    // Als er geen voertuig is gevonden, meld dit
+                    if (!voertuig) {
+                        setResult('❌ Kenteken niet gevonden in RDW-register.', 'fout');
+                        scanStatus.textContent = `❌ ${kenteken} niet gevonden`;
+                        // Toch toevoegen aan historie?
+                        addHistory(kenteken, 'Niet gevonden', false);
+                        return;
                     }
 
                     // Bouw resultaat
@@ -796,7 +965,7 @@
                         scanStatus.textContent = `✅ ${kenteken} - schoon (status: ${gevondenStatus})`;
                     }
 
-                    // Toon voertuigdetails
+                    // Toon details
                     html += `<div class="details">`;
                     html += `<strong>Kenteken:</strong> ${voertuig.kenteken || clean}<br>`;
                     html += `<strong>Merk:</strong> ${voertuig.merk || 'Onbekend'}<br>`;
@@ -806,13 +975,14 @@
                         html += `<strong>APK vervaldatum:</strong> ${voertuig.vervaldatum_apk}<br>`;
                     }
                     html += `<strong>Status voertuig:</strong> ${gevondenStatus}`;
-
-                    // Link naar RDW site
                     html +=
                         `<br><a href="https://ovi.rdw.nl/default.aspx?kenteken=${clean}" target="_blank" class="rdw-link">🔗 Controleer op RDW-site</a>`;
                     html += `</div>`;
 
                     setResult(html, isGestolen ? 'gestolen' : 'schoon');
+
+                    // Voeg toe aan historie
+                    addHistory(kenteken, gevondenStatus, isGestolen);
 
                 } catch (err) {
                     console.error('RDW API error:', err);
@@ -848,11 +1018,13 @@
                 if (e.key === 'Enter') checkBtn.click();
             });
 
+            clearHistoryBtn.addEventListener('click', clearHistory);
+
             // --- Init ---
             scanOverlay.classList.add('active');
             hintMessage.textContent = 'Klik op "Start camera" om te beginnen. Gebruik "Scan nu" voor handmatige scan.';
             setResult('📱 Klik op "Start camera" en geef toestemming voor de camera.', '');
-            console.log('Kenteken Scanner gestart met verbeterde RDW check (alle velden).');
+            console.log('Kenteken Scanner gestart met verbeterde RDW check (twee datasets) en historie.');
         })();
     </script>
 </body>
